@@ -1,0 +1,289 @@
+---
+title: "Predictions"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include = False}
+#rm(list = ls())
+library(tidyverse)
+library(tictoc)
+library(neuralnet)
+library(RcppRoll)
+setwd("/Users/m31781/Documents/DataLyfe/NFL SB Prediction/NFL_Reg_Season_Predictions")
+```
+
+```{r aggregation}
+all_stats <- read.csv('Complete_Stats.csv')
+
+# results parsing
+t <- as.character(all_stats$Result)
+split <- as.data.frame(str_split_fixed(t, ' ', 2))
+split2 <- as.data.frame(str_split_fixed(split$V2, '-', 2))
+
+Results <- data.frame(split$V1, split2$V1, split2$V2)
+names(Results) <- c('Result', 'Tm.Score', 'Opp.Score')
+
+all_stats <- cbind(Results, select(all_stats, -c('Result')))
+remove(t, split, split2, Results)
+
+# Opponent stats
+#all_stats$ID <- paste(all_stats$Opp, all_stats$Tm, data$Date, sep = '|') # Opp. will be added to column name later
+opp_table <- all_stats %>%
+  mutate(ID = paste(all_stats$Opp, all_stats$Tm, all_stats$Year, all_stats$Week, sep = '|')) %>%
+  select(-c("Tm.ID", "Tm", "Year", "Week", "Loc", "Opp", "Result", 'Tm.Score', 
+            'Opp.Score', 'Penalties.OppPen', 'Penalties.OppYds')) %>%
+  rename_with(~paste0('Opp.', .)) %>%
+  inner_join(all_stats, by = c('Opp.ID'='Tm.ID'), keep = T) %>%
+  mutate(ID = paste(Tm, Opp, Year, Week, sep = '|'))
+
+# check merge
+# apply(all_stats, 2, function(x){sum(is.na(x))})
+
+keep_columns <- function(){
+   x <- c(
+  "ID",
+  "Tm", 
+  "Opp", 
+  "Year", 
+  "Week", 
+  "Loc", 
+  "Tm.Score", 
+  "Total_Yards.Tot", 
+  "Total_Yards.Ply", 
+  "Total_Yards.Y.P", 
+  "Total_Yards.TO", 
+  "Total_Yards.ToP",
+  "Pass_Stats.Cmp", 
+  "Pass_Stats.Att", 
+  "Pass_Stats.Cmp.", 
+  "Pass_Stats.Yds",
+  "Pass_Stats.TD", 
+  "Pass_Stats.Int",
+  "Pass_Stats.Sk", 
+  "Pass_Stats.SkYds", 
+  "Pass_Stats.Rate", 
+  "Rush_Stats.Yds", 
+  "Rush_Stats.Y.A", 
+  "Rush_Stats.TD", 
+  "Rush_Stats.Att", 
+  "Penalties.Pen", 
+  "Penalties.Yds", 
+  "Opp.Total_Yards.Tot", 
+  "Opp.Total_Yards.Ply", 
+  "Opp.Total_Yards.Y.P", 
+  "Opp.Total_Yards.TO", 
+  "Opp.Total_Yards.ToP",
+  "Opp.Pass_Stats.Cmp", 
+  "Opp.Pass_Stats.Att", 
+  "Opp.Pass_Stats.Cmp.", 
+  "Opp.Pass_Stats.Yds", 
+  "Opp.Pass_Stats.TD", 
+  "Opp.Pass_Stats.Int", 
+  "Opp.Pass_Stats.Sk", 
+  "Opp.Pass_Stats.SkYds", 
+  "Opp.Pass_Stats.Rate", 
+  "Opp.Rush_Stats.Yds", 
+  "Opp.Rush_Stats.Y.A", 
+  "Opp.Rush_Stats.TD", 
+  "Opp.Rush_Stats.Att", 
+  "Opp.Penalties.Pen", 
+  "Opp.Penalties.Yds")
+  return(x)
+}
+
+opp_table <- opp_table[keep_columns()]
+
+games_data<- select(opp_table, -c('ID', 'Tm', 'Year', 'Week', 'Opp'))
+games_data <- as.data.frame(sapply(games_data, as.numeric))
+
+#write.csv(games_data, '2018-2021_games_data.csv', row.names = F)
+```
+
+```{r next_week}
+# keep_columns2 <- function(){
+#    x <- c(
+#   "ID",
+#   "Tm", 
+#   "Opp", 
+#   "Year", 
+#   "Week", 
+#   "Loc", 
+# #  "Result", 
+#   "Tm.Score", 
+#   "NW.Score",
+# #  "Opp.Score", 
+#   "Total_Yards.Tot", 
+#   "Total_Yards.Ply", 
+#   "Total_Yards.Y.P", 
+#   "Total_Yards.TO", 
+#   "Total_Yards.ToP",
+#   "Pass_Stats.Cmp", 
+#   "Pass_Stats.Att", 
+#   "Pass_Stats.Cmp.", 
+#   "Pass_Stats.Yds",
+#   "Pass_Stats.TD", 
+#   "Pass_Stats.Int",
+#   "Pass_Stats.Sk", 
+#   "Pass_Stats.SkYds", 
+#   "Pass_Stats.Rate", 
+#   "Rush_Stats.Yds", 
+#   "Rush_Stats.Y.A", 
+#   "Rush_Stats.TD", 
+#   "Rush_Stats.Att", 
+#   "Penalties.Pen", 
+#   "Penalties.Yds", 
+#   "Opp.Total_Yards.Tot", 
+#   "Opp.Total_Yards.Ply", 
+#   "Opp.Total_Yards.Y.P", 
+#   "Opp.Total_Yards.TO", 
+#   "Opp.Total_Yards.ToP",
+#   "Opp.Pass_Stats.Cmp", 
+#   "Opp.Pass_Stats.Att", 
+#   "Opp.Pass_Stats.Cmp.", 
+#   "Opp.Pass_Stats.Yds", 
+#   "Opp.Pass_Stats.TD", 
+#   "Opp.Pass_Stats.Int", 
+#   "Opp.Pass_Stats.Sk", 
+#   "Opp.Pass_Stats.SkYds", 
+#   "Opp.Pass_Stats.Rate", 
+#   "Opp.Rush_Stats.Yds", 
+#   "Opp.Rush_Stats.Y.A", 
+#   "Opp.Rush_Stats.TD", 
+#   "Opp.Rush_Stats.Att", 
+#   "Opp.Penalties.Pen", 
+#   "Opp.Penalties.Yds")
+#   return(x)
+# }
+# 
+# nw_score <- select(opp_table, Year, Week, Tm, Tm.Score) %>%
+#   mutate(Prev_Week = Week - 1) %>%
+#   arrange(Year, Week) 
+# 
+# next_week <- opp_table %>%
+#   left_join(nw_score, by = c('Tm'='Tm', 'Year' = 'Year', 'Week' = 'Prev_Week')) %>%
+# #  filter(Tm == 'KAN', Year == 2018) %>%
+#   rename('Tm.Score' = Tm.Score.x, 'NW.Score' = Tm.Score.y) %>%
+#   select(keep_columns2()) %>%
+#   arrange(Tm, Year, Week) 
+# 
+# nrow(tidyr::drop_na(next_week))
+
+```
+
+```{r rolling}
+# rolling average
+# r_ave <- function(column){
+#   rmc <- round(roll_mean(column, n = 3, align = "right", fill = NA), digits = 2)
+#   return(rmc)
+# }
+# 
+# r_ave_next_week <- as.data.frame(sapply(next_week[9:ncol(next_week)], r_ave))
+# r_ave_next_week <- cbind(next_week[1:8], r_ave_next_week)
+# r_ave_next_week <- r_ave_next_week %>%
+#   filter(!Week %in% c(1,2), !is.na(NW.Score)) %>%
+#   select(-c("Tm", "Opp", "Year", "Week", "Tm.Score")) %>%
+#   mutate(NW.Score = as.numeric(NW.Score)) 
+```
+
+```{r nw_data}
+# games_data<- data.frame(scale(select(r_ave_next_week, -c('ID', 'NW.Score'))))
+# games_data$NW.Score <- r_ave_next_week$NW.Score
+# 
+# set.seed(123)
+# ind <- sample(2, nrow(games_data), replace = TRUE, prob = c(0.7, 0.3))
+# train.data <- games_data[ind == 1, ]
+# test.data <- games_data[ind == 2, ]
+```
+
+```{r test average}
+
+# set.seed(123)
+# ind <- sample(2, nrow(games_data), replace = TRUE, prob = c(0.7, 0.3))
+# train.data <- games_data[ind == 1, ]
+# test.data <- games_data[ind == 2, ]
+# t1 <- select(r_ave_next_week, -c('Loc', 'NW.Score'))
+# t2 <- opp_table %>%
+#   filter(Week > 2) %>%
+#   select(-c('Tm', 'Year', 'Week', 'Opp', 'Loc', 'Tm.Score'))
+# 
+# t3 <- arrange(rbind(t1, t2), ID)
+# 
+# diffs <- t3 %>%
+#   group_by(ID) %>%
+#   summarise(count = n(), Total_Yards.Tot = diff(Total_Yards.Tot), Total_Yards.Ply = diff(Total_Yards.Ply), Total_Yards.TO = diff(Total_Yards.TO),
+#            Pass_Stats.Cmp = diff(Pass_Stats.Att), Pass_Stats.Yds = diff(Pass_Stats.Yds), Pass_Stats.TD = diff(Pass_Stats.TD),
+#            Pass_Stats.Rate = diff(Pass_Stats.Rate), Rush_Stats.Yds = diff(Rush_Stats.Yds), Rush_Stats.TD = diff(Rush_Stats.TD), 
+#            Rush_Stats.Att = diff(Rush_Stats.Att), Penalties.Pen = diff(Penalties.Pen), Penalties.Yds = diff(Penalties.Yds)) %>%
+#   filter(count > 1)
+# 
+# # show differences between 3 day average and actual
+# tot_diffs <- apply(diffs[3:ncol(diffs)], 2, function(x){mean(abs(x))})
+# tot_diffs
+```
+
+```{r lm}
+# # Fit the model
+# myFormula<-Tm.Score~.
+# model<-lm(myFormula, data=train.data)
+# #print(model)
+# #summary(model)
+# 
+# # model evaluation
+# # pred <- predict(model, newdata = test.data)
+# # plot(test.data$Tm.Score, pred, xlab = "Observed", ylab = "Prediction")
+# # abline(a = 0, b = 1)
+# # plot(model)
+# 
+# # minimize adequate model
+# Model2<-step(model, direction="backward")
+# pred2 <- predict(Model2, newdata = test.data)
+# 
+# ModelMetrics::mae(test.data$Tm.Score, pred2)
+#summary(Model2)
+
+```
+
+```{r keras package}
+# Preprocessing
+X <- as.array(scale(select(games_data, -c(Tm.Score))))
+Y <- as.array(games_data$Tm.Score)
+
+set.seed(123)
+ind <- sample(2, nrow(games_data), replace = TRUE, prob = c(0.8, 0.2))
+X_train <- X[ind == 1, ]
+Y_train <- Y[ind == 1]
+
+X_test <- X[ind == 2, ]
+Y_test <- Y[ind == 2]
+
+# model creation
+tic('Model Training')
+# Train a NN
+model <- keras_model_sequential(name = 'NFL_Predictions')
+model %>% 
+  layer_dense(units=16,  input_shape=ncol(X_train), activation = 'relu') %>%
+  layer_dropout(0.2) %>%
+  layer_dense(units=1, activation = 'relu') 
+
+model %>% compile(loss="mse",
+                  optimizer = "adam",
+                  metrics = list("mean_absolute_error"))
+
+model %>% summary()  
+
+model %>% fit(X_train, Y_train, batch_size=10, epochs=40, shuffle = TRUE, verbose=0)
+
+toc()
+
+# evaluate using test set
+testpred<-predict(model, X_test)
+ModelMetrics::mae(Y_test, testpred)
+
+#save_model_hdf5(model, 'NFL_model.h5')
+
+```
+

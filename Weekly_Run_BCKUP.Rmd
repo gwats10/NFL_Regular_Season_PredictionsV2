@@ -1,0 +1,184 @@
+---
+title: "Weekly_Run"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+start <- Sys.time()
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+library(tidyverse)
+library(keras)
+library(tictoc)
+source('my_functions.R')
+```
+
+
+```{r get_last_week_data}
+setwd("/Users/m31781/Documents/DataLyfe/NFL SB Prediction/NFL_Reg_Season_Predictions")
+
+week_start <- lubridate::floor_date(Sys.Date(), unit = 'week') + 1
+
+fileName <- paste0('/Users/m31781/Documents/DataLyfe/NFL SB Prediction/NFL_Reg_Season_Predictions/Weekly_Update/Weekly_Update_', week_start, '.csv')
+
+if(!file.exists(fileName)){
+  
+  py_run_file('/Users/m31781/Documents/DataLyfe/NFL SB Prediction/NFL_Reg_Season_Predictions/NFL_Data_Pull.py')
+
+}
+
+new_week <- read.csv(fileName, header = T) %>%
+  mutate(ID = paste(Team, Opponent, Season, Week, sep = '|')) %>%
+  select(keep_update_columns()) %>%
+  filter(Season == 2021) %>%
+  mutate(HomeOrAway = ifelse(HomeOrAway == 'HOME',1,0))
+
+# names from source file
+names(new_week) <- new_column_names()
+
+complete_update <- new_week %>%
+  mutate(ID = paste(Opp, Tm, Year, Week, sep = '|')) %>%
+  select(-c("Tm", "Year", "Week", "Loc", "Opp", 'Tm.Score')) %>%
+  rename_with(~paste0('Opp.', .)) %>%
+  inner_join(new_week, by = c('Opp.ID'='ID'), keep = T) %>%
+  mutate(ID = paste(Tm, Opp, Year, Week, sep = '|'))
+
+# names from source file
+complete_update <- complete_update[keep_columns()]
+
+new_games_data<- select(complete_update, -c('ID', 'Year', 'Opp'))
+new_games_data[3:ncol(new_games_data)] <- as.data.frame(sapply(new_games_data[3:ncol(new_games_data)], as.numeric))
+
+# merge with past data
+games_data <- read.csv('2018-2021_games_data.csv') %>%
+  mutate(Tm = 'NA', Week = 0)
+
+games_data <- rbind(games_data, new_games_data)
+tm_hold <- games_data$Tm
+wk_hold <- games_data$Week
+tm.score_hold <- games_data$Tm.Score
+games_data <- as.data.frame(scale(select(games_data, -Tm)))
+games_data$Tm <- tm_hold
+games_data$Week <- wk_hold
+games_data$Tm.Score <- tm.score_hold
+```
+
+```{r keras package}
+# Preprocessing
+X <- as.array(as.matrix(select(games_data, -c(Tm.Score, Tm, Week))))
+Y <- as.array(games_data$Tm.Score)
+
+set.seed(12)
+ind <- sample(2, nrow(games_data), replace = TRUE, prob = c(0.9, 0.1))
+X_train <- X[ind == 1, ]
+Y_train <- Y[ind == 1]
+
+X_test <- X[ind == 2, ]
+Y_test <- Y[ind == 2]
+
+# model creation
+tic('Model Training')
+# Train a NN
+model <- keras_model_sequential(name = 'NFL_Predictions')
+model %>% 
+  layer_dense(units=16,  input_shape=ncol(X_train), activation = 'relu') %>%
+  layer_dropout(0.2) %>%
+  layer_dense(units=1, activation = 'relu') 
+
+model %>% compile(loss="mse",
+                  optimizer = "adam",
+                  metrics = list("mean_absolute_error"))
+
+model %>% summary()  
+
+model %>% fit(X_train, Y_train, batch_size=10, epochs=40, shuffle = TRUE, verbose=0)
+
+toc()
+
+# evaluate using test set
+testpred<-predict(model, X_test)
+ModelMetrics::mae(Y_test, testpred)
+
+#save_model_hdf5(model, 'NFL_model.h5')
+
+```
+
+
+```{r create_test_data}
+# load model
+#model <- load_model_hdf5('NFL_model.h5')
+NFL_week <- 10
+
+n_weeks_to_average <- 5
+
+schedule <- read.csv('cleaned_schedule.csv', stringsAsFactors = F) %>%
+  filter(Week == NFL_week)
+
+this_week_teams <- unique(c(schedule$Tm1, schedule$Tm2))
+
+get_predictions <- function(matchup){
+  
+  split <- stringr::str_split_fixed(matchup, '-', n=2)
+  
+  hometeam <- split[1,2]
+  awayteam <- split[1,1]
+  
+  last_3weeks <- games_data %>%
+    filter(Tm %in% c(hometeam, awayteam)) %>%
+    group_by(Tm) %>%
+    top_n(n_weeks_to_average, Week) %>%
+    summarise(across(Total_Yards.Tot:Opp.Penalties.Yds, mean)) %>%
+    mutate(Loc = ifelse(Tm == hometeam,1,0))
+  
+  test <- as.array(as.matrix(last_3weeks[2:ncol(last_3weeks)]))
+  row.names(test) <- last_3weeks$Tm
+  
+  #defense replaces offense
+  # test[1, 21:40] <- test[2, 1:20]
+  # test[2, 21:40] <- test[1, 1:20]
+  
+  #offense replaces defense (og)
+  test[1, 1:20] <- test[2, 21:40]
+  test[2, 1:20] <- test[1, 21:40]
+  
+  test <- as.array(test)
+  
+  # create predictions
+  testpred<-predict(model, test)
+  
+  ateam_print <- paste0('The awayteam ', awayteam, ' will score ', round(testpred[2,1], 1))  
+  hteam_print <- paste0('The hometeam ', hometeam, ' will score ', round(testpred[1,1], 1))
+
+  print(ateam_print)
+  print(hteam_print)
+  
+  testpred <- list(testpred)
+  
+  return(testpred)
+  
+  }
+
+week_list <- paste(schedule$Tm1, schedule$Tm2, sep = '-')
+
+game <- list()
+
+for(i in week_list){
+  
+  game[[i]] <- get_predictions(i)
+  
+}
+
+df <- as.data.frame(game)
+prediction_df <- data.frame(Matchup = names(game), T1.Score = as.numeric(df[2,]), T2.Score = as.numeric(df[1,]))
+
+outfile_name <- paste0('Predictions/Predictions_', week_start, '.csv')
+
+if(!file.exists(outfile_name)){
+  #write.csv(prediction_df, outfile_name, row.names = F)
+}
+
+end <- Sys.time()
+#end - start
+```
+

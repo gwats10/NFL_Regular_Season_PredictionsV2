@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Oct 12 21:36:27 2021
+
+@author: m31781
+"""
+
+from requests.auth import HTTPBasicAuth
+import requests
+import json
+import pandas as pd
+
+url = 'https://api.sportsdata.io/v3/nfl/scores/json/TeamGameStats/2020REG/1'
+headers = {'Accept': 'application/json', 'Ocp-Apim-Subscription-Key': '703dcf47836b4313891d49b915d249e1' } 
+auth = HTTPBasicAuth('apikey', '703dcf47836b4313891d49b915d249e1')
+#files = {'file': open('filename', 'rb')}
+
+req = requests.get(url, headers=headers)
+
+j = req.json()
+
+len(j[0].keys())
+
+df = pd.DataFrame(j)
